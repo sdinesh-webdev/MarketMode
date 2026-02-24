@@ -52,7 +52,6 @@ const getCachedData = (key) => {
     }
     return parsed.data;
   } catch (e) {
-    console.warn('Cache read error:', e);
     localStorage.removeItem(key);
     return null;
   }
@@ -62,7 +61,6 @@ const setCachedData = (key, data, timestamp = Date.now()) => {
   try {
     localStorage.setItem(key, JSON.stringify({ data, timestamp }));
   } catch (e) {
-    console.warn('Cache write error:', e);
   }
 };
 
@@ -70,7 +68,6 @@ const clearCachedData = (key) => {
   try {
     localStorage.removeItem(key);
   } catch (e) {
-    console.warn('Cache clear error:', e);
   }
 };
 
@@ -81,7 +78,6 @@ const formatDateToDDMMYYYY = (dateStr) => {
     const [year, month, day] = dateStr.split('-');
     return `${day}/${month}/${year}`;
   } catch (error) {
-    console.error('Error formatting date:', error);
     return dateStr;
   }
 };
@@ -151,6 +147,9 @@ const WeeklyPerformanceReport = () => {
   // Use refs to store functions that can be called from useEffect
   const syncCSVFormatRef = useRef(null);
   const autoSyncTriggeredRef = useRef(false);
+  // Ref to guard against concurrent inverter fetches (avoids stale-closure issues)
+  const isFetchingInvertersRef = useRef(false);
+  const invertersFetchedRef = useRef(false);
 
   // Toast notification helper
   const showToast = useCallback((message, type = 'info', duration = 5000) => {
@@ -250,7 +249,6 @@ const WeeklyPerformanceReport = () => {
       const diffTime = Math.abs(end - start);
       return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
     } catch (e) {
-      console.error('Error calculating days:', e);
       return 7;
     }
   }, [dateRange]);
@@ -284,7 +282,6 @@ const WeeklyPerformanceReport = () => {
           setSyncStatus(syncInfo);
         }
       } catch (err) {
-        console.warn("Failed to restore sync info:", err);
         clearCachedData(CACHE_KEYS.SYNC_INFO);
       }
     }
@@ -308,15 +305,18 @@ const WeeklyPerformanceReport = () => {
   }, []);
 
   // Fetch inverter list from Google Sheets
+  // Uses refs for guards so this callback is stable (no stale closure issues)
   const fetchInverterList = useCallback(async () => {
-    if (loading.inverters) return;
+    // Ref-based guard: prevents concurrent fetches regardless of render cycle
+    if (isFetchingInvertersRef.current) return;
+    isFetchingInvertersRef.current = true;
 
     setLoading(prev => ({ ...prev, inverters: true }));
     setError('');
 
     try {
       const url = `${GOOGLE_SCRIPT_URL}?sheet=${encodeURIComponent(SHEET_NAME)}&action=fetch`;
-      console.log('Fetching inverter list from:', url);
+
 
       const response = await fetch(url);
 
@@ -330,7 +330,7 @@ const WeeklyPerformanceReport = () => {
       try {
         jsonData = JSON.parse(text);
       } catch (parseError) {
-        console.error('JSON parse error:', parseError, 'Response:', text);
+
         // Try to extract JSON from response
         const start = text.indexOf('{');
         const end = text.lastIndexOf('}');
@@ -387,6 +387,7 @@ const WeeklyPerformanceReport = () => {
         showToast('No inverters found in the sheet. Please check the Inverter_id sheet.', 'warning');
       }
 
+      invertersFetchedRef.current = true;
       setInverters(inverterList);
       setSelectedInverters(inverterList.map(inv => inv.inverterId));
       setError('');
@@ -394,25 +395,29 @@ const WeeklyPerformanceReport = () => {
       showToast(`✓ Loaded ${inverterList.length} inverters`, 'success');
 
     } catch (err) {
-      console.error('Error fetching inverter list:', err);
+
       setError(`Failed to load inverter list: ${err.message}`);
       showToast(`⚠ Failed to load inverters: ${err.message}`, 'error');
 
       // Provide sample data if fetch fails
-      if (inverters.length === 0) {
-        const sampleInverters = [
-          { id: 1, serialNo: '49', inverterId: 'I2492100573', beneficiaryName: 'RAHUL SHARMA', capacity: 3, selected: true },
-          { id: 2, serialNo: '29', inverterId: 'I2492100118', beneficiaryName: 'JACKY SANCHETI', capacity: 3, selected: true },
-          { id: 3, serialNo: '19', inverterId: 'I2460100025', beneficiaryName: 'JAI KUMAR NEBHANI', capacity: 3, selected: true }
-        ];
-        setInverters(sampleInverters);
-        setSelectedInverters(sampleInverters.map(inv => inv.inverterId));
-        showToast('Using sample inverter data', 'info');
-      }
+      setInverters(prev => {
+        if (prev.length === 0) {
+          const sampleInverters = [
+            { id: 1, serialNo: '49', inverterId: 'I2492100573', beneficiaryName: 'RAHUL SHARMA', capacity: 3, selected: true },
+            { id: 2, serialNo: '29', inverterId: 'I2492100118', beneficiaryName: 'JACKY SANCHETI', capacity: 3, selected: true },
+            { id: 3, serialNo: '19', inverterId: 'I2460100025', beneficiaryName: 'JAI KUMAR NEBHANI', capacity: 3, selected: true }
+          ];
+          setSelectedInverters(sampleInverters.map(inv => inv.inverterId));
+          showToast('Using sample inverter data', 'info');
+          return sampleInverters;
+        }
+        return prev;
+      });
     } finally {
       setLoading(prev => ({ ...prev, inverters: false }));
+      isFetchingInvertersRef.current = false;
     }
-  }, [loading.inverters, showToast, inverters.length]);
+  }, [showToast]); // stable: no stale-closure deps
 
   // Track last fetched parameters to avoid redundant calls
   const lastFetchedParamsRef = React.useRef({
@@ -452,7 +457,7 @@ const WeeklyPerformanceReport = () => {
         user_password: USER_PASSWORD
       };
 
-      console.log('Attempting login to iSolarCloud...');
+
       const response = await fetch('https://gateway.isolarcloud.com.hk/openapi/login', {
         method: 'POST',
         headers: {
@@ -469,13 +474,13 @@ const WeeklyPerformanceReport = () => {
       try {
         result = JSON.parse(responseText);
       } catch (e) {
-        console.error('Invalid JSON response:', responseText);
+
         throw new Error(`Invalid server response. Please try again.`);
       }
 
       if (!response.ok) {
         const errorMsg = result.result_msg || `Server error (${response.status})`;
-        console.error('Login failed:', errorMsg);
+
         throw new Error(errorMsg);
       }
 
@@ -495,10 +500,8 @@ const WeeklyPerformanceReport = () => {
         localStorage.setItem(CACHE_KEYS.TOKEN_TIMESTAMP, Date.now().toString());
 
         showToast('✓ Login successful! Fetching data...', 'success');
-        console.log('Auto-login successful for WeeklyPerformanceReport');
 
-        // Fetch inverter list after successful login
-        setTimeout(() => fetchInverterList(), 500);
+        // fetchInverterList is triggered by the useEffect watching localToken/token
       } else {
         // Retry on busy server
         if (result.result_msg?.toLowerCase().includes('busy') && retryCount < 2) {
@@ -509,7 +512,7 @@ const WeeklyPerformanceReport = () => {
         throw new Error(result.result_msg || 'Login failed with unknown error');
       }
     } catch (err) {
-      console.error('Auto-login error:', err);
+
 
       // Clear invalid token
       clearToken();
@@ -529,9 +532,9 @@ const WeeklyPerformanceReport = () => {
     } finally {
       setLoginLoading(false);
     }
-  }, [loginLoading, setToken, clearToken, showToast, fetchInverterList]);
+  }, [loginLoading, setToken, clearToken, showToast]);
 
-  // Auto-login on mount if no valid token
+  // Auto-login on mount if no valid token; fetch inverter list once token is available
   useEffect(() => {
     const savedToken = localStorage.getItem(CACHE_KEYS.TOKEN);
     const tokenTimestamp = localStorage.getItem(CACHE_KEYS.TOKEN_TIMESTAMP);
@@ -541,10 +544,11 @@ const WeeklyPerformanceReport = () => {
         setLocalToken(savedToken);
         setToken(savedToken);
         setLoginSuccess(true);
-        console.log('Using cached token');
+
+        // fetchInverterList will be triggered by the token watcher useEffect below
         return;
       } else {
-        console.log('Token expired, clearing cache');
+
         clearCachedData(CACHE_KEYS.TOKEN);
         clearCachedData(CACHE_KEYS.TOKEN_TIMESTAMP);
       }
@@ -552,18 +556,20 @@ const WeeklyPerformanceReport = () => {
 
     // No valid token, trigger auto-login
     if (!localToken && !loginLoading) {
-      console.log('No valid token found, triggering auto-login');
+
       handleAutoLogin();
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Handle inverter list fetching on mount
+  // Fetch inverter list ONLY after login is fully confirmed (loginSuccess = true)
+  // This prevents the partial-fetch race where inverters were fetched while token was still being set
   useEffect(() => {
     const activeToken = localToken || token;
-    if (activeToken && inverters.length === 0 && !loading.inverters) {
+    if (loginSuccess && activeToken && !invertersFetchedRef.current && !isFetchingInvertersRef.current) {
+
       fetchInverterList();
     }
-  }, [localToken, token, inverters.length, loading.inverters, fetchInverterList]);
+  }, [loginSuccess, localToken, token, fetchInverterList]);
 
   // Fetch performance data for all selected inverters
   const fetchPerformanceData = useCallback(async (isManualRefresh = false) => {
@@ -638,7 +644,6 @@ const WeeklyPerformanceReport = () => {
           try {
             const inverter = inverters.find(inv => inv.inverterId === inverterId);
             if (!inverter) {
-              console.warn(`Inverter not found: ${inverterId}`);
               return null;
             }
 
@@ -646,7 +651,6 @@ const WeeklyPerformanceReport = () => {
 
             // Fetch PS key if not cached
             if (!psKey) {
-              console.log(`Fetching PS key for inverter: ${inverterId}`);
               const deviceRes = await fetch('https://gateway.isolarcloud.com.hk/openapi/getPVInverterRealTimeData', {
                 method: 'POST',
                 headers: {
@@ -681,7 +685,6 @@ const WeeklyPerformanceReport = () => {
                 if (psKey) {
                   psKeyCache[inverterId] = psKey;
                 } else {
-                  console.warn(`No PS key found for inverter: ${inverterId}`);
                   return {
                     ...inverter,
                     psKey: null,
@@ -694,7 +697,6 @@ const WeeklyPerformanceReport = () => {
                   };
                 }
               } else {
-                console.warn(`Invalid device data response for ${inverterId}:`, deviceData);
                 return {
                   ...inverter,
                   psKey: null,
@@ -709,7 +711,6 @@ const WeeklyPerformanceReport = () => {
             }
 
             // Fetch energy data using PS key
-            console.log(`Fetching energy data for inverter: ${inverterId}, PS Key: ${psKey}`);
             const energyRes = await fetch('https://gateway.isolarcloud.com.hk/openapi/getDevicePointsDayMonthYearDataList', {
               method: 'POST',
               headers: {
@@ -789,7 +790,6 @@ const WeeklyPerformanceReport = () => {
                 }
               }
             } else {
-              console.warn(`Invalid energy data for ${inverterId}:`, energyData);
               return {
                 ...inverter,
                 psKey,
@@ -817,7 +817,6 @@ const WeeklyPerformanceReport = () => {
               lifetimeGeneration: dailyData.length > 0 ? dailyData[dailyData.length - 1].cumulativeKwh : 0
             };
           } catch (err) {
-            console.error(`Error processing inverter ${inverterId}:`, err);
             const inverter = inverters.find(inv => inv.inverterId === inverterId) || {
               id: i,
               inverterId,
@@ -875,7 +874,7 @@ const WeeklyPerformanceReport = () => {
 
       setError('');
     } catch (err) {
-      console.error('Fetch error:', err);
+
       setError(`Failed to fetch data: ${err.message}`);
       showToast(`⚠ Fetch failed: ${err.message}`, 'error');
 
@@ -932,8 +931,7 @@ const WeeklyPerformanceReport = () => {
         throw new Error("No valid data to sync (all records have errors)");
       }
 
-      console.log("Preparing to sync CSV format data:", syncData.length, "records");
-      console.log("Date range:", formattedStartDate, "to", formattedEndDate);
+
 
       const jsonData = JSON.stringify(syncData);
 
@@ -957,7 +955,7 @@ const WeeklyPerformanceReport = () => {
       }
 
       const result = await response.json();
-      console.log("CSV Format Sync response:", result);
+
 
       if (result.success) {
         const syncInfo = {
@@ -981,7 +979,7 @@ const WeeklyPerformanceReport = () => {
         throw new Error(result.error || result.message || "Sync failed");
       }
     } catch (err) {
-      console.error("CSV Format Sync error:", err);
+
       showToast(`CSV Sync Failed: ${err.message}`, "error", 8000);
       return { success: false, error: err.message };
     } finally {
@@ -1013,7 +1011,7 @@ const WeeklyPerformanceReport = () => {
       // Check if auto-sync already triggered
       if (autoSyncTriggeredRef.current) return;
 
-      console.log('🚀 AUTO-SYNC: Today is', getDayName(new Date().getDay()), '- triggering automatic CSV sync');
+
 
       // Show auto-sync notification
       showToast(`📅 Auto-sync: Today is ${getDayName(new Date().getDay())}. Submitting weekly report...`, 'info', 6000);
@@ -1046,13 +1044,13 @@ const WeeklyPerformanceReport = () => {
             // Show success toast
             showToast('✅ Auto-sync: Weekly report submitted successfully!', 'success', 8000);
 
-            console.log('✅ AUTO-SYNC: Completed successfully');
+
           } else {
-            console.error('❌ AUTO-SYNC: Failed:', result.error);
+
             showToast('❌ Auto-sync failed. Please try manual sync.', 'error', 8000);
           }
         } catch (error) {
-          console.error('❌ AUTO-SYNC: Error:', error);
+
           showToast('❌ Auto-sync error. Please try manual sync.', 'error', 8000);
         }
       }, 3000);
@@ -1074,7 +1072,7 @@ const WeeklyPerformanceReport = () => {
     // Check if token is still valid
     const tokenTimestamp = localStorage.getItem(CACHE_KEYS.TOKEN_TIMESTAMP);
     if (isTokenExpired(tokenTimestamp)) {
-      console.log('Token expired, refreshing...');
+
       handleAutoLogin();
       return;
     }
@@ -1525,23 +1523,6 @@ const WeeklyPerformanceReport = () => {
     showToast('Logged out successfully', 'info');
   }, [clearToken, showToast]);
 
-  // Debug function to check environment variables (remove in production)
-  const checkEnvironment = useCallback(() => {
-    console.log('Environment Check:');
-    console.log('- SOLAR_APPKEY:', SOLAR_APPKEY ? 'Set' : 'Missing');
-    console.log('- SOLAR_SECRET_KEY:', SOLAR_SECRET_KEY ? 'Set' : 'Missing');
-    console.log('- USER_ACCOUNT:', USER_ACCOUNT ? 'Set' : 'Missing');
-    console.log('- USER_PASSWORD:', USER_PASSWORD ? 'Set' : 'Missing');
-    console.log('- GOOGLE_SCRIPT_URL:', GOOGLE_SCRIPT_URL);
-    console.log('- Cached Token:', localStorage.getItem(CACHE_KEYS.TOKEN) ? 'Exists' : 'None');
-  }, []);
-
-  // Check environment on component mount (development only)
-  useEffect(() => {
-    if (import.meta.env.DEV) {
-      checkEnvironment();
-    }
-  }, [checkEnvironment]);
 
   return (
     <AdminLayout>
@@ -1575,13 +1556,41 @@ const WeeklyPerformanceReport = () => {
         </div>
       )}
 
-      {/* Login Loading Overlay */}
-      {loginLoading && (
-        <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[90] flex items-center justify-center">
-          <div className="bg-white rounded-2xl p-8 shadow-2xl max-w-sm mx-4 text-center">
-            <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Connecting to Server</h3>
-            <p className="text-gray-600 text-sm">Please wait while we authenticate your session...</p>
+      {/* Initial Full Screen Loading State */}
+      {(loginLoading || (localToken && !invertersFetchedRef.current)) && (
+        <div className="fixed inset-0 bg-gray-50 z-50 flex flex-col items-center justify-center min-h-screen">
+          <div className="bg-white p-8 rounded-2xl shadow-xl flex flex-col items-center max-w-sm w-full relative overflow-hidden">
+            {/* Background decorative elements */}
+            <div className="absolute top-0 right-0 -mt-4 -mr-4 w-32 h-32 bg-blue-100 rounded-full mix-blend-multiply opacity-50"></div>
+            <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-32 h-32 bg-purple-100 rounded-full mix-blend-multiply opacity-50"></div>
+
+            <div className="relative mb-8">
+              <div className="w-20 h-20 rounded-full border-4 border-blue-100 flex items-center justify-center relative z-10 bg-white">
+                <BarChart3 className="w-10 h-10 text-blue-600 animate-pulse" />
+              </div>
+              {/* Spinner ring */}
+              <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-blue-600 animate-spin z-20"></div>
+            </div>
+
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Initializing Dashboard</h3>
+
+            <div className="flex items-center gap-2 text-sm text-gray-500 mb-6 font-medium bg-gray-50 px-4 py-2 rounded-full">
+              {loginLoading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-blue-500" />
+                  Authenticating Session...
+                </>
+              ) : (
+                <>
+                  <Database className="w-4 h-4 animate-bounce text-purple-500" />
+                  Loading Inverter Data...
+                </>
+              )}
+            </div>
+
+            <div className="w-full bg-gray-100 rounded-full h-1.5 mb-1 overflow-hidden">
+              <div className="bg-blue-600 h-1.5 rounded-full animate-pulse transition-all duration-300 w-3/4"></div>
+            </div>
           </div>
         </div>
       )}
