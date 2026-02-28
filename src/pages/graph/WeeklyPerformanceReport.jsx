@@ -146,7 +146,7 @@ const WeeklyPerformanceReport = () => {
 
   // Use refs to store functions that can be called from useEffect
   const syncCSVFormatRef = useRef(null);
-  const autoSyncTriggeredRef = useRef(false);
+  const autoSyncTriggeredRef = useRef(null); // stores the date string to handle long-running tabs
   // Ref to guard against concurrent inverter fetches (avoids stale-closure issues)
   const isFetchingInvertersRef = useRef(false);
   const invertersFetchedRef = useRef(false);
@@ -1008,8 +1008,8 @@ const WeeklyPerformanceReport = () => {
       const lastAutoSyncDate = getCachedData(CACHE_KEYS.LAST_AUTO_SYNC_DATE);
       if (lastAutoSyncDate === todayStr) return;
 
-      // Check if auto-sync already triggered
-      if (autoSyncTriggeredRef.current) return;
+      // Check if auto-sync already triggered for today
+      if (autoSyncTriggeredRef.current === todayStr) return;
 
 
 
@@ -1023,7 +1023,7 @@ const WeeklyPerformanceReport = () => {
         isTodayAutoSyncDay: true
       }));
 
-      autoSyncTriggeredRef.current = true;
+      autoSyncTriggeredRef.current = todayStr;
 
       // Trigger auto-sync after a short delay to ensure data is ready
       setTimeout(async () => {
@@ -1272,7 +1272,7 @@ const WeeklyPerformanceReport = () => {
   // Clear auto-sync history
   const handleClearAutoSyncHistory = useCallback(() => {
     clearCachedData(CACHE_KEYS.LAST_AUTO_SYNC_DATE);
-    autoSyncTriggeredRef.current = false;
+    autoSyncTriggeredRef.current = null;
     setAutoSyncStatus(prev => ({
       ...prev,
       lastAutoSync: null,
@@ -1611,15 +1611,7 @@ const WeeklyPerformanceReport = () => {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {import.meta.env.DEV && (
-                <button
-                  onClick={checkEnvironment}
-                  className="px-4 py-2 bg-white/20 text-white rounded-lg font-medium hover:bg-white/30 transition flex items-center gap-2"
-                >
-                  <Info className="w-4 h-4" />
-                  Debug
-                </button>
-              )}
+
               <button
                 onClick={() => handleAutoLogin(0)}
                 disabled={loginLoading}
