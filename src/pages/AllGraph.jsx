@@ -180,87 +180,100 @@ function AllGraph() {
                 localStorage.setItem('solarTokenTimestamp', Date.now().toString());
             }
 
-            // B. Fetch PS Keys (Devices) in bulk using SNs from Google Sheet
+            // B. Fetch PS Keys (Devices) in batches of 10 using SNs from Google Sheet
             setProgress({ current: 30, total: 100, message: 'Mapping cloud devices...' });
             const snList = inverterData.map(inv => inv.inverterId.trim());
-            const deviceResponse = await fetch('https://gateway.isolarcloud.com.hk/openapi/getPVInverterRealTimeData', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json', 'x-access-key': SOLAR_SECRET_KEY,
-                    'sys_code': SOLAR_SYS_CODE, 'token': currentToken
-                },
-                body: JSON.stringify({ appkey: SOLAR_APPKEY, sn_list: snList, lang: '_en_US', sys_code: 207 })
-            });
-
-            const devicesResult = await deviceResponse.json();
-            if (devicesResult.result_code !== "1") throw new Error(devicesResult.result_msg);
-
-            const deviceList = devicesResult.result_data?.device_point_list || [];
             const fetchedDevices = [];
 
-            deviceList.forEach(item => {
-                const dp = item.device_point;
-                if (dp && dp.ps_key) {
-                    const sn = dp.sn || dp.serial_number || dp.device_sn ||
-                        snList.find(s => (dp.device_name?.includes(s)) || (dp.ps_key?.includes(s)));
+            for (let i = 0; i < snList.length; i += 10) {
+                const batchSnList = snList.slice(i, i + 10);
+                setProgress({ current: Math.round(30 + (i / snList.length) * 30), total: 100, message: `Mapping cloud devices (${i + 1} to ${Math.min(i + 10, snList.length)})...` });
 
-                    const sheetMatch = inverterData.find(inv => inv.inverterId.trim() === sn);
+                const deviceResponse = await fetch('https://gateway.isolarcloud.com.hk/openapi/getPVInverterRealTimeData', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json', 'x-access-key': SOLAR_SECRET_KEY,
+                        'sys_code': SOLAR_SYS_CODE, 'token': currentToken
+                    },
+                    body: JSON.stringify({ appkey: SOLAR_APPKEY, sn_list: batchSnList, lang: '_en_US', sys_code: 207 })
+                });
 
-                    fetchedDevices.push({
-                        serialNumber: sn || 'Unknown',
-                        psKey: dp.ps_key,
-                        deviceName: sheetMatch?.beneficiaryName || dp.device_name || sn,
-                        success: true
-                    });
-                }
-            });
+                const devicesResult = await deviceResponse.json();
+                if (devicesResult.result_code !== "1") throw new Error(devicesResult.result_msg);
+
+                const deviceList = devicesResult.result_data?.device_point_list || [];
+
+                deviceList.forEach(item => {
+                    const dp = item.device_point;
+                    if (dp && dp.ps_key) {
+                        const sn = dp.sn || dp.serial_number || dp.device_sn ||
+                            batchSnList.find(s => (dp.device_name?.includes(s)) || (dp.ps_key?.includes(s)));
+
+                        if (sn) {
+                            const sheetMatch = inverterData.find(inv => inv.inverterId.trim() === sn);
+                            fetchedDevices.push({
+                                serialNumber: sn || 'Unknown',
+                                psKey: dp.ps_key,
+                                deviceName: sheetMatch?.beneficiaryName || dp.device_name || sn,
+                                success: true
+                            });
+                        }
+                    }
+                });
+            }
 
             setDevices(fetchedDevices);
             if (fetchedDevices.length === 0) throw new Error('Could not find cloud match for these inverters.');
 
-            // C. Fetch Yearly Data in bulk (Lifecycle)
+            // C. Fetch Yearly Data in batches of 10 (Lifecycle)
             setProgress({ current: 60, total: 100, message: 'Retrieving annual logs...' });
             const psKeyList = fetchedDevices.map(d => d.psKey);
-            const historyResponse = await fetch('https://gateway.isolarcloud.com.hk/openapi/getDevicePointsDayMonthYearDataList', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json', 'x-access-key': SOLAR_SECRET_KEY,
-                    'sys_code': SOLAR_SYS_CODE, 'token': currentToken
-                },
-                body: JSON.stringify({
-                    appkey: SOLAR_APPKEY,
-                    data_point: yearlyForm.data_point,
-                    data_type: yearlyForm.data_type,
-                    end_time: yearRange.endYear.toString(),
-                    lang: '_en_US',
-                    order: yearlyForm.order,
-                    ps_key_list: psKeyList,
-                    query_type: yearlyForm.query_type,
-                    start_time: yearRange.startYear.toString(),
-                    sys_code: 207
-                })
-            });
-
-            const yearlyResult = await historyResponse.json();
-            if (yearlyResult.result_code !== "1") throw new Error(yearlyResult.result_msg);
-
-            const resultData = yearlyResult.result_data;
             const newYearlyData = {};
             let successCount = 0;
 
-            if (resultData) {
-                fetchedDevices.forEach(device => {
-                    const deviceData = resultData[device.psKey];
-                    if (deviceData) {
-                        const syntheticApiResult = { result_data: { [device.psKey]: deviceData } };
-                        newYearlyData[device.serialNumber] = {
-                            deviceName: device.deviceName,
-                            data: syntheticApiResult,
-                            formatted: formatYearlyData(syntheticApiResult, device.serialNumber, yearRange)
-                        };
-                        successCount++;
-                    }
+            for (let i = 0; i < psKeyList.length; i += 10) {
+                const batchPsKeyList = psKeyList.slice(i, i + 10);
+                setProgress({ current: Math.round(60 + (i / psKeyList.length) * 40), total: 100, message: `Retrieving annual logs (${i + 1} to ${Math.min(i + 10, psKeyList.length)})...` });
+
+                const historyResponse = await fetch('https://gateway.isolarcloud.com.hk/openapi/getDevicePointsDayMonthYearDataList', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json', 'x-access-key': SOLAR_SECRET_KEY,
+                        'sys_code': SOLAR_SYS_CODE, 'token': currentToken
+                    },
+                    body: JSON.stringify({
+                        appkey: SOLAR_APPKEY,
+                        data_point: yearlyForm.data_point,
+                        data_type: yearlyForm.data_type,
+                        end_time: yearRange.endYear.toString(),
+                        lang: '_en_US',
+                        order: yearlyForm.order,
+                        ps_key_list: batchPsKeyList,
+                        query_type: yearlyForm.query_type,
+                        start_time: yearRange.startYear.toString(),
+                        sys_code: 207
+                    })
                 });
+
+                const yearlyResult = await historyResponse.json();
+                if (yearlyResult.result_code !== "1") throw new Error(yearlyResult.result_msg);
+
+                const resultData = yearlyResult.result_data;
+                if (resultData) {
+                    batchPsKeyList.forEach(psKey => {
+                        const device = fetchedDevices.find(d => d.psKey === psKey);
+                        const deviceData = resultData[psKey];
+                        if (device && deviceData) {
+                            const syntheticApiResult = { result_data: { [psKey]: deviceData } };
+                            newYearlyData[device.serialNumber] = {
+                                deviceName: device.deviceName,
+                                data: syntheticApiResult,
+                                formatted: formatYearlyData(syntheticApiResult, device.serialNumber, yearRange)
+                            };
+                            successCount++;
+                        }
+                    });
+                }
             }
 
             setYearlyData(newYearlyData);
