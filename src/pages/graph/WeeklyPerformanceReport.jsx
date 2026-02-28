@@ -554,11 +554,8 @@ const WeeklyPerformanceReport = () => {
       }
     }
 
-    // No valid token, trigger auto-login
-    if (!localToken && !loginLoading) {
-
-      handleAutoLogin();
-    }
+    // No valid token, trigger auto-login immediately on mount
+    handleAutoLogin();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch inverter list ONLY after login is fully confirmed (loginSuccess = true)
