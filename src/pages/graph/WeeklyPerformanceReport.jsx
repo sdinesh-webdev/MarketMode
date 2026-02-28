@@ -1732,7 +1732,7 @@ const WeeklyPerformanceReport = () => {
                       title="Sync in CSV format (weekly report)"
                     >
                       <FileText className={`w-4 h-4 ${syncLoading ? 'animate-pulse' : ''}`} />
-                      {syncLoading ? 'Syncing...' : 'Sync CSV Format'}
+                      {syncLoading ? 'Syncing...' : 'Upload CSV to Google Sheet'}
                     </button>
 
                     {/* Manual Auto-sync Trigger */}
